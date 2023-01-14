@@ -3,11 +3,15 @@
 
 #define MAX_REPEAT 255
 
-#define TOKEN_NULL 0
-#define TOKEN_INT 1
-#define TOKEN_UINT 2
-#define TOKEN_CHAR 3
-#define TOKEN_FLOAT 4
+#define FORMAT_TOKEN_NULL 0
+#define FORMAT_TOKEN_INT 1
+#define FORMAT_TOKEN_UINT 2
+#define FORMAT_TOKEN_CHAR 3
+#define FORMAT_TOKEN_FLOAT 4
+#define FORMAT_TOKEN_STRING 5
+#define FORMAT_TOKEN_EOF 6
+
+#define UINT64_INFINITY ((uint64_t) -1)
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,16 +25,13 @@ struct FormatParserStruct {
     uint16_t format_string_len;
     uint16_t curr_pos;
 
-    int last_token;
-    int last_token_bytes;
-    
-    //int16_t jump_pos;
-
-    // block repeats  
-    UINT64PairStack pair_stack;
-
-    // token repeatsd
+    // repeat single token
     uint64_t repeat;
+    int last_token;
+    uint16_t last_token_bytes;
+    
+    // repeat blocks (must use a stack)
+    UINT64PairStack pair_stack;
 };
 
 typedef struct FormatParserStruct *FormatParser;
@@ -41,7 +42,7 @@ FormatParser FormatParserNew(char *format_string) {
     fp->format_string_len = strlen(format_string);
     fp->curr_pos = 0;
 
-    fp->last_token = TOKEN_NULL;
+    fp->last_token = FORMAT_TOKEN_NULL;
     fp->last_token_bytes = 0;
     
     fp->pair_stack = UINT64PairStackNew();
@@ -64,48 +65,84 @@ uint64_t ten_to_pow(uint8_t pow) {
     return result;
 }
 
-uint64_t parse_number(uint16_t *pos, char *format_string) {
+int parse_number(FormatParser fp, uint64_t *number) {
 
     // store digit columns in reverse
-    static const uint8_t max_columns = 255;
-    uint8_t columns[max_columns]; // assume numbers don't go larger than 256 digits
-    uint8_t column_idx = max_columns - 1; 
+    static const uint8_t max_digits = 255;
+    uint64_t digits[max_digits]; // assume numbers don't go larger than 256 digits
 
-    // we assume this function is called at a digit, so a do while loop will suffice
-    do {
-        columns[column_idx] = char_to_uint8_t(format_string[*pos]);
-        *pos = *pos + 1;
-    } while (columns[column_idx--] < 10 && column_idx > 0); 
-    // ^ this works since if current pos isn't a digit, the value wont be < 10 due to unsigned integer overflow
+    const uint16_t first_digit_idx = fp->curr_pos;
+    uint16_t last_digit_idx = first_digit_idx + 1;
 
-    uint64_t result = 0;
-    
-    // loop from first digit to last
-    // ignore current idx value which points to a non-digit
-    for (uint8_t i = column_idx+2; i < max_columns; i++) {
+    // move cursor along each digit number
+    // keep both d and curr_pos aligned (but offset to each other [by first_digit_pos])
+    for (uint16_t d = 0; d < max_digits && fp->curr_pos < fp->format_string_len; ++d, ++fp->curr_pos) {
+        const char c = fp->format_string[fp->curr_pos];
+        const uint8_t digit = char_to_uint8_t(c);
 
-        // calculate the power of ten
-        const uint64_t pow = - column_idx + i - 2;
+        // check if the current digit is a number char
+        // if the current char is not a digit then stop parsing now
+        if (digit > 9 || digit < 0) {
+            break;
+        }
 
-        // now calculate the val from the digit * 10^pow
-        const uint64_t val = ((uint64_t) columns[i]) * ten_to_pow(pow);
-        result += val;
+        // add the digit
+        digits[d] = digit;
     }
 
-    return result;
+    // move the last digit idx to end
+    last_digit_idx = fp->curr_pos - 1;
+
+    // calculate the highest power of ten
+    const uint16_t highest_ten_power = last_digit_idx - first_digit_idx;
+
+    // reset number
+    *number = 0;
+
+    // loop both powers and digit idx "d"
+    for (uint16_t d = 0, pow = highest_ten_power; d <= last_digit_idx && pow >= 0; ++d, --pow) {
+        //printf("%llu, %d\n", digits[d], pow);
+        *number += digits[d] * ten_to_pow(pow);
+    }
+
+    return EXIT_SUCCESS;
 }
 
-int FormatParserNext(FormatParser fp, FILE *file) {
+int parse_type_specifier(FormatParser fp, int *token, uint16_t *token_bytes) {
+    switch(fp->format_string[fp->curr_pos]) {
+        case 'd':
+        case 'i':
+            *token = FORMAT_TOKEN_INT;
+            *token_bytes = 4; // default
+            return EXIT_SUCCESS;
+        case 'u':
+            *token = FORMAT_TOKEN_UINT;
+            *token_bytes = 4; // default
+            return EXIT_SUCCESS;
+        case 'c':
+            *token = FORMAT_TOKEN_CHAR;
+            *token_bytes = 1; // default
+            return EXIT_SUCCESS;
+        case 'f':
+            *token = FORMAT_TOKEN_FLOAT;
+            *token_bytes = 4; // default
+            return EXIT_SUCCESS;
+        case 's':
+            *token = FORMAT_TOKEN_STRING;
+            *token_bytes = 0;
+            return EXIT_SUCCESS;
+        default:
+            *token = FORMAT_TOKEN_NULL;
+            *token_bytes = 0;
+            printf("F1\n");
+            return EXIT_FAILURE;
+    }
+}
+
+int parse_var_size_type_specifier(FormatParser fp, int *token, uint16_t *token_bytes) {
+    // assumption: last char in format_string = '%'
 
     switch (fp->format_string[fp->curr_pos]) {
-        case '[':
-            fp->jump_pos = fp->curr_pos;
-            fp->curr_pos++;
-            return FormatParserNext(fp, file);
-        case ']':
-            fp->curr_pos = fp->jump_pos;
-            fp->curr_pos++;
-            return FormatParserNext(fp, file);
         case '1':
         case '2':
         case '3':
@@ -114,25 +151,123 @@ int FormatParserNext(FormatParser fp, FILE *file) {
         case '6':
         case '7':
         case '8':
-        case '9':
-            // parse the rest of the number (if there is more)
-            const uint64_t repeat = parse_number(fp->curr_pos, fp->format_string);
+        case '9': {
+            // parse the byte count num
+            parse_number(fp, (uint64_t*) token_bytes);
 
-            switch (fp->format_string[fp->curr_pos]) {
-                case '[':
-                    fp->curr_pos++;
-                    UINT64PairStackPush(fp->pair_stack, repeat, fp->curr_pos);
-                    return FormatParserNext(fp, file); // still must get the actual next token
-                default:
-                    fp->repeat = repeat;
+            // we must call "parse_type_specifier" on the token_bytes even though we already calculated token_bytes
+            // put the value into a dummy ptr to be ignored
+            uint16_t *dummy_uint16_ptr = 0;
+
+            // now parse the format token following the byte count
+            printf("PTS2\n");
+            if (parse_type_specifier(fp, token, dummy_uint16_ptr) == EXIT_SUCCESS) {
+
+                // remember in case of repeats
+                fp->last_token = *token;
+                fp->last_token_bytes = *token_bytes;
+
+                fp->curr_pos++;
+                return EXIT_SUCCESS;
+            } else {
+                return EXIT_FAILURE;
+            }
+        } case 'd':
+        case 'i':
+        case 'u':
+        case 'f':
+        case 'c':
+        case 's':
+            printf("PTS1\n");
+            if (parse_type_specifier(fp, token, token_bytes) == EXIT_SUCCESS) {
+                // remember in case of repeats
+                fp->last_token = *token;
+                fp->last_token_bytes = *token_bytes;
+
+                fp->curr_pos++;
+
+                return EXIT_SUCCESS;
+            } else {
+                printf("F1\n");
+                return EXIT_FAILURE;
+            }
+        default:
+            return EXIT_FAILURE;
+    }
+}
+
+int FormatParserNextFormatToken(FormatParser fp, int *token, uint16_t *token_bytes) {
+
+    // check for single token repeats
+    if (fp->repeat > 0) {
+        printf("repeats: %llu\n", fp->repeat);
+        *token = fp->last_token;
+        *token_bytes = fp->last_token_bytes;
+        fp->repeat--;
+        return EXIT_SUCCESS;
+    }
+    // check that we haven't reached the end
+    if (fp->curr_pos >= fp->format_string_len) {
+        *token = FORMAT_TOKEN_EOF;
+        *token_bytes = 0;
+        return EXIT_FAILURE;
+    }
+
+    switch (fp->format_string[fp->curr_pos]) {
+        case '[': {
+            uint64_t block_repeat = UINT64_INFINITY;     
+            if (fp->repeat > 0) {
+                block_repeat = fp->repeat;
             }
 
-            break;
-        case '%':
+            UINT64PairStackPush(fp->pair_stack, fp->curr_pos, block_repeat);
             fp->curr_pos++;
-            switch (fp->format_string[fp->curr_pos]) {
+            return FormatParserNextFormatToken(fp, token, token_bytes);
+            
+           break;
+        } case ']': {
 
+            // pop off repeat stack to check its values
+            uint64_t block_start = 0, block_repeats = 0;
+            UINT64PairStackPop(fp->pair_stack, &block_start, &block_repeats);
+
+            // push back again if there are more repeats
+            if (--block_repeats > 0) {
+                UINT64PairStackPush(fp->pair_stack, block_start, block_repeats);
+
+                // move cursor back to start of block
+                fp->curr_pos = block_start;
             }
+
+            return FormatParserNextFormatToken(fp, token, token_bytes);
+        } case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9': {
+            int start = fp->curr_pos;
+
+            // set repeat to the number parsed
+            parse_number(fp, &fp->repeat); // will overwrite fp->repeat
+            printf("1just read single token number: [%d:%d] %llu\n", start, fp->curr_pos, fp->repeat);
+
+            // TODO: parse a block
+
+            // for now just parse single token and move along
+            if (fp->format_string[fp->curr_pos++] != '%') {
+                return EXIT_FAILURE;
+            }
+
+            return parse_var_size_type_specifier(fp, token, token_bytes);
+        } case '%':
+            ++fp->curr_pos; // skip over '%' char
+            return parse_var_size_type_specifier(fp, token, token_bytes);
+        default:
+            return EXIT_FAILURE;
 
     }
 
