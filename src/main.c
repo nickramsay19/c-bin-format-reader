@@ -9,8 +9,6 @@ int main() {
     int token = 0;
     uint16_t token_bytes = 0;
 
-
-
     FormatParser fp = FormatParserNew("%d5%d%c");
     int fail = 0;
     do {
@@ -20,7 +18,7 @@ int main() {
         fail = FormatParserNextFormatToken(fp, &token, &token_bytes);
         int end = fp->curr_pos;
         printf("[%d:%d] %d, %d\n", start, end, token, token_bytes);
-    } while (token != FORMAT_TOKEN_EOF && !fail);
+    } while (token != FORMAT_TOKEN_NULL && !fail);
 
     if (fail) {
         printf("failed!\n");

@@ -9,7 +9,7 @@
 #define FORMAT_TOKEN_CHAR 3
 #define FORMAT_TOKEN_FLOAT 4
 #define FORMAT_TOKEN_STRING 5
-#define FORMAT_TOKEN_EOF 6
+//#define FORMAT_TOKEN_EOF 6
 
 #define UINT64_INFINITY ((uint64_t) -1)
 
@@ -208,9 +208,11 @@ int FormatParserNextFormatToken(FormatParser fp, int *token, uint16_t *token_byt
     }
     // check that we haven't reached the end
     if (fp->curr_pos >= fp->format_string_len) {
-        *token = FORMAT_TOKEN_EOF;
+        *token = FORMAT_TOKEN_NULL;
         *token_bytes = 0;
-        return EXIT_FAILURE;
+
+        // successfully parsed up to EOF
+        return EXIT_SUCCESS; 
     }
 
     switch (fp->format_string[fp->curr_pos]) {
@@ -254,6 +256,9 @@ int FormatParserNextFormatToken(FormatParser fp, int *token, uint16_t *token_byt
             // set repeat to the number parsed
             parse_number(fp, &fp->repeat); // will overwrite fp->repeat
             printf("1just read single token number: [%d:%d] %llu\n", start, fp->curr_pos, fp->repeat);
+            
+            // since we are performing a read now, we must decrement repeat now
+            fp->repeat--;
 
             // TODO: parse a block
 
