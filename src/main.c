@@ -4,25 +4,94 @@
 
 #include "include/FormatParser.h"
 
-int main() {
+uint32_t swap_endianess(uint32_t num) {
+    return ((num>>24)&0xff) | // move byte 3 to byte 0
+           ((num<<8)&0xff0000) | // move byte 1 to byte 2
+           ((num>>8)&0xff00) | // move byte 2 to byte 1
+           ((num<<24)&0xff000000); // byte 0 to byte 3
+}
 
-    int token = 0;
-    uint16_t token_bytes = 0;
+int main(int argc, char **argv) {
 
-    FormatParser fp = FormatParserNew("%d5%d%c");
+    // check if theres enough args
+    if (argc < 3) {
+        printf("Error: Not enough args.\n");
+        return EXIT_SUCCESS;
+    }
+
+    // setup parser
+    // mustn't modify format string from here on out as it is still stack allocated
+    FormatParser parser = FormatParserNew(argv[1]);
+
+    // open file
+    FILE *fp = fopen(argv[2], "rb");
+
+    // test
+    int *token = malloc(sizeof(int));
+    uint16_t *token_bytes = malloc(sizeof(uint16_t));
+    uint64_t *block = malloc(sizeof(uint64_t));
     int fail = 0;
     do {
-        printf("===============\n");
+        fail = FormatParserNextFormatToken(parser, token, token_bytes);
 
-        int start = fp->curr_pos;
-        fail = FormatParserNextFormatToken(fp, &token, &token_bytes);
-        int end = fp->curr_pos;
-        printf("[%d:%d] %d, %d\n", start, end, token, token_bytes);
-    } while (token != FORMAT_TOKEN_NULL && !fail);
+        // extract and print from bin file fp
+        switch (*token) {
+            case FORMAT_TOKEN_INT: {
+                fread(block, *token_bytes, 1, fp);
+                if (*token_bytes == 1) {
+                    printf("%hd", (int8_t) *block);
+                } else if (*token_bytes <= 2) {
+                    printf("%hd", (int16_t) *block);
+                } else if (*token_bytes <= 4) {
+                    printf("%d", (int32_t) *block); // >> 4-*token_bytes
+                } else if (*token_bytes <= 8) {
+                    printf("%lld", (int64_t) *block); // >> 8-*token_bytes
+                } else {
+                    printf("\nError: Invalid token_bytes size. token_bytes must be less than 9.\n");
+                    fail = EXIT_FAILURE; // will end loop
+                }
+                break;
+            } case FORMAT_TOKEN_UINT: {
+                fread(block, *token_bytes, 1, fp);
+                if (*token_bytes == 1) {
+                    printf("%hu", (uint8_t) *block);
+                } else if (*token_bytes <= 2) {
+                    printf("%hu", (uint16_t) *block);
+                } else if (*token_bytes <= 4) {
+                    printf("%u", (uint32_t) *block); // >> 4-*token_bytes
+                } else if (*token_bytes <= 8) {
+                    printf("%llu", (uint64_t) *block); // >> 8-*token_bytes
+                } else {
+                    printf("\nError: Invalid token_bytes size. token_bytes must be less than 9.\n");
+                    fail = EXIT_FAILURE; // will end loop
+                }
+                break;
+            } case FORMAT_TOKEN_CHAR: {
+                fread(block, 1, 1, fp);
+                printf("%c,", (char) *block);
+                break;
+            } case FORMAT_TOKEN_NULL: {
+                fail = EXIT_FAILURE; // not the most applicable var name, not actually failing, just finishing
+                break;
+            } default: {
+                printf("?");
+                break;
+            } 
+        }
+    } while (*token != FORMAT_TOKEN_NULL && !fail);
 
     if (fail) {
         printf("failed!\n");
+    } else {
+        printf("\n");
     }
 
+    // clean up
+    fclose(fp);
+    FormatParserFree(parser);
+    free(token);
+    free(token_bytes);
+    free(block);
+    
     return 0;
 }

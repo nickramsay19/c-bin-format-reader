@@ -42,14 +42,19 @@ FormatParser FormatParserNew(char *format_string) {
     fp->format_string_len = strlen(format_string);
     fp->curr_pos = 0;
 
+    fp->repeat = 0;
     fp->last_token = FORMAT_TOKEN_NULL;
     fp->last_token_bytes = 0;
     
     fp->pair_stack = UINT64PairStackNew();
 
-    fp->repeat = 0;
-
     return fp;
+}
+
+int FormatParserFree(FormatParser fp) {
+    free(fp);
+
+    return EXIT_SUCCESS;
 }
 
 uint8_t char_to_uint8_t(char c) {
@@ -109,34 +114,43 @@ int parse_number(FormatParser fp, uint64_t *number) {
 }
 
 int parse_type_specifier(FormatParser fp, int *token, uint16_t *token_bytes) {
+    int token_val = FORMAT_TOKEN_NULL;
+    uint16_t token_bytes_val = 0;
+
     switch(fp->format_string[fp->curr_pos]) {
         case 'd':
         case 'i':
-            *token = FORMAT_TOKEN_INT;
-            *token_bytes = 4; // default
-            return EXIT_SUCCESS;
+            token_val = FORMAT_TOKEN_INT;
+            token_bytes_val = 4; // default
+            break;
         case 'u':
-            *token = FORMAT_TOKEN_UINT;
-            *token_bytes = 4; // default
-            return EXIT_SUCCESS;
+            token_val = FORMAT_TOKEN_UINT;
+            token_bytes_val = 4; // default
+            break;
         case 'c':
-            *token = FORMAT_TOKEN_CHAR;
-            *token_bytes = 1; // default
-            return EXIT_SUCCESS;
+            token_val = FORMAT_TOKEN_CHAR;
+            token_bytes_val = 1; // default
+            break;
         case 'f':
-            *token = FORMAT_TOKEN_FLOAT;
-            *token_bytes = 4; // default
-            return EXIT_SUCCESS;
+            token_val = FORMAT_TOKEN_FLOAT;
+            token_bytes_val = 4; // default
+            break;
         case 's':
-            *token = FORMAT_TOKEN_STRING;
-            *token_bytes = 0;
-            return EXIT_SUCCESS;
+            token_val = FORMAT_TOKEN_STRING;
+            token_bytes_val = 0;
+            break;
         default:
-            *token = FORMAT_TOKEN_NULL;
-            *token_bytes = 0;
-            printf("F1\n");
             return EXIT_FAILURE;
     }
+
+    if (token != NULL) {
+        *token = token_val;
+    }
+    if (token_bytes != NULL) {
+        *token_bytes = token_bytes_val;
+    }
+
+    return EXIT_SUCCESS;
 }
 
 int parse_var_size_type_specifier(FormatParser fp, int *token, uint16_t *token_bytes) {
@@ -154,14 +168,13 @@ int parse_var_size_type_specifier(FormatParser fp, int *token, uint16_t *token_b
         case '9': {
             // parse the byte count num
             parse_number(fp, (uint64_t*) token_bytes);
+            //printf("Parsed byte count: %d\n", *token_bytes);
 
-            // we must call "parse_type_specifier" on the token_bytes even though we already calculated token_bytes
-            // put the value into a dummy ptr to be ignored
-            uint16_t *dummy_uint16_ptr = 0;
+            //printf("PTS2 %d\n", fp->curr_pos);
 
             // now parse the format token following the byte count
-            printf("PTS2\n");
-            if (parse_type_specifier(fp, token, dummy_uint16_ptr) == EXIT_SUCCESS) {
+            // give it null for token_bytes since it as already calculated
+            if (parse_type_specifier(fp, token, NULL) == EXIT_SUCCESS) {
 
                 // remember in case of repeats
                 fp->last_token = *token;
@@ -178,7 +191,7 @@ int parse_var_size_type_specifier(FormatParser fp, int *token, uint16_t *token_b
         case 'f':
         case 'c':
         case 's':
-            printf("PTS1\n");
+            //printf("PTS1 %d\n", fp->curr_pos);
             if (parse_type_specifier(fp, token, token_bytes) == EXIT_SUCCESS) {
                 // remember in case of repeats
                 fp->last_token = *token;
@@ -198,14 +211,16 @@ int parse_var_size_type_specifier(FormatParser fp, int *token, uint16_t *token_b
 
 int FormatParserNextFormatToken(FormatParser fp, int *token, uint16_t *token_bytes) {
 
+
     // check for single token repeats
     if (fp->repeat > 0) {
-        printf("repeats: %llu\n", fp->repeat);
+        //printf("repeats: %llu\n", fp->repeat);
         *token = fp->last_token;
         *token_bytes = fp->last_token_bytes;
         fp->repeat--;
         return EXIT_SUCCESS;
     }
+    
     // check that we haven't reached the end
     if (fp->curr_pos >= fp->format_string_len) {
         *token = FORMAT_TOKEN_NULL;
@@ -240,7 +255,6 @@ int FormatParserNextFormatToken(FormatParser fp, int *token, uint16_t *token_byt
                 // move cursor back to start of block
                 fp->curr_pos = block_start;
             }
-
             return FormatParserNextFormatToken(fp, token, token_bytes);
         } case '1':
         case '2':
@@ -251,11 +265,11 @@ int FormatParserNextFormatToken(FormatParser fp, int *token, uint16_t *token_byt
         case '7':
         case '8':
         case '9': {
-            int start = fp->curr_pos;
+            //int start = fp->curr_pos;
 
             // set repeat to the number parsed
             parse_number(fp, &fp->repeat); // will overwrite fp->repeat
-            printf("1just read single token number: [%d:%d] %llu\n", start, fp->curr_pos, fp->repeat);
+            //printf("1just read single token number: [%d:%d] %llu\n", start, fp->curr_pos, fp->repeat);
             
             // since we are performing a read now, we must decrement repeat now
             fp->repeat--;
