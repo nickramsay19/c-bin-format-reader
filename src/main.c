@@ -30,9 +30,9 @@ int main(int argc, char **argv) {
     int *token = malloc(sizeof(int));
     uint16_t *token_bytes = malloc(sizeof(uint16_t));
     uint64_t *block = malloc(sizeof(uint64_t));
-    int fail = 0;
+    int finish = 0; // doubles as a finish looping indicator and stores error code from parser
     do {
-        fail = FormatParserNextFormatToken(parser, token, token_bytes);
+        finish = FormatParserNextFormatToken(parser, token, token_bytes);
 
         // extract and print from bin file fp
         switch (*token) {
@@ -47,8 +47,8 @@ int main(int argc, char **argv) {
                 } else if (*token_bytes <= 8) {
                     printf("%lld", (int64_t) *block); // >> 8-*token_bytes
                 } else {
-                    printf("\nError: Invalid token_bytes size. token_bytes must be less than 9.\n");
-                    fail = EXIT_FAILURE; // will end loop
+                    printf("\nError: Invalid \"token_bytes\" size for a signed integer. \"token_bytes\" must be less than 9.\n");
+                    finish = EXIT_FAILURE; // will end loop
                 }
                 break;
             } case FORMAT_TOKEN_UINT: {
@@ -62,8 +62,19 @@ int main(int argc, char **argv) {
                 } else if (*token_bytes <= 8) {
                     printf("%llu", (uint64_t) *block); // >> 8-*token_bytes
                 } else {
-                    printf("\nError: Invalid token_bytes size. token_bytes must be less than 9.\n");
-                    fail = EXIT_FAILURE; // will end loop
+                    printf("\nError: Invalid \"token_bytes\" size for an unsigned integer. \"token_bytes\" must be less than 9.\n");
+                    finish = EXIT_FAILURE; // will end loop
+                }
+                break;
+            } case FORMAT_TOKEN_FLOAT: {
+                fread(block, *token_bytes, 1, fp);
+                if (*token_bytes == 4) {
+                    printf("(%f)", (float) *block);
+                } else if (*token_bytes == 8) {
+                    printf("(%lf)", (double) *block);
+                } else {
+                    printf("\nError: Invalid \"token_bytes\" size for floating point number. \"token_bytes\" must be either 4 or 8.\n");
+                    finish = EXIT_FAILURE; // will end loop
                 }
                 break;
             } case FORMAT_TOKEN_CHAR: {
@@ -71,20 +82,14 @@ int main(int argc, char **argv) {
                 printf("%c,", (char) *block);
                 break;
             } case FORMAT_TOKEN_NULL: {
-                fail = EXIT_FAILURE; // not the most applicable var name, not actually failing, just finishing
+                finish = true;
                 break;
             } default: {
                 printf("?");
                 break;
             } 
         }
-    } while (*token != FORMAT_TOKEN_NULL && !fail);
-
-    if (fail) {
-        printf("failed!\n");
-    } else {
-        printf("\n");
-    }
+    } while (*token != FORMAT_TOKEN_NULL && !finish);
 
     // clean up
     fclose(fp);
